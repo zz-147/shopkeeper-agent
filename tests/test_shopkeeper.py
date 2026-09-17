@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 import os
+from requests import ConnectionError
 from unittest.mock import patch
 from pathlib import Path
 
@@ -180,6 +181,11 @@ class DashScopeEmbeddingTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "HTTP 400，错误代码：InvalidParameter"):
                 self.provider.embed_query("北方营收")
 
+    def test_network_error_is_translated_to_actionable_message(self) -> None:
+        with patch("shopkeeper_agent.embeddings.dashscope.TextEmbedding.call", side_effect=ConnectionError):
+            with self.assertRaisesRegex(RuntimeError, "检查网络、代理和 Base URL"):
+                self.provider.embed_query("北方营收")
+
     def test_compatible_base_url_is_converted_to_native_sdk_base_url(self) -> None:
         from shopkeeper_agent.embeddings import _native_api_base_url
 
@@ -202,6 +208,21 @@ class EnvironmentTests(unittest.TestCase):
             self.assertEqual(os.environ["SHOPKEEPER_NEW_KEY"], "loaded")
         finally:
             os.environ.pop("SHOPKEEPER_NEW_KEY", None)
+            if previous is None:
+                os.environ.pop("SHOPKEEPER_TEST_KEY", None)
+            else:
+                os.environ["SHOPKEEPER_TEST_KEY"] = previous
+
+    def test_dotenv_loader_can_override_selected_keys(self) -> None:
+        previous = os.environ.get("SHOPKEEPER_TEST_KEY")
+        try:
+            os.environ["SHOPKEEPER_TEST_KEY"] = "from-system"
+            with tempfile.TemporaryDirectory() as directory:
+                env_file = Path(directory) / ".env"
+                env_file.write_text("SHOPKEEPER_TEST_KEY=from-file\n", encoding="utf-8")
+                load_dotenv_file(env_file, override_keys={"SHOPKEEPER_TEST_KEY"})
+            self.assertEqual(os.environ["SHOPKEEPER_TEST_KEY"], "from-file")
+        finally:
             if previous is None:
                 os.environ.pop("SHOPKEEPER_TEST_KEY", None)
             else:

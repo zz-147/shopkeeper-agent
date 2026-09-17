@@ -7,13 +7,18 @@ import os
 import re
 import urllib.error
 import urllib.request
-from typing import Protocol
+from typing import Collection, Protocol
 
 from .catalog import MetadataCatalog
 
 
-def load_dotenv_file(env_path: str | os.PathLike[str]) -> None:
-    """加载简单的 KEY=VALUE 配置，且不覆盖用户已经设置的系统环境变量。"""
+def load_dotenv_file(
+    env_path: str | os.PathLike[str],
+    override_keys: Collection[str] = (),
+) -> None:
+    """加载简单的 KEY=VALUE 配置，默认不覆盖系统环境变量。"""
+
+    forced_keys = frozenset(override_keys)
     path = os.fspath(env_path)
     if not os.path.exists(path):
         return
@@ -24,8 +29,8 @@ def load_dotenv_file(env_path: str | os.PathLike[str]) -> None:
                 continue
             key, value = line.split("=", maxsplit=1)
             key = key.strip()
-            if key:
-                os.environ.setdefault(key, value.strip().strip("'\""))
+            if key and (key in forced_keys or key not in os.environ):
+                os.environ[key] = value.strip().strip("'\"")
 
 
 class SQLGenerator(Protocol):

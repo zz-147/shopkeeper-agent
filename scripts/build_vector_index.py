@@ -10,14 +10,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from shopkeeper_agent.catalog import MetadataCatalog
-from shopkeeper_agent.embeddings import DashScopeEmbeddingProvider
+from shopkeeper_agent.embeddings import DASHSCOPE_ENVIRONMENT_KEYS, DashScopeEmbeddingProvider
 from shopkeeper_agent.generators import load_dotenv_file
 from shopkeeper_agent.vector_retrieval import build_metadata_documents
 from shopkeeper_agent.vector_store import QdrantMetadataIndex
 
 
 def main() -> int:
-    load_dotenv_file(PROJECT_ROOT / ".env")
+    load_dotenv_file(PROJECT_ROOT / ".env", override_keys=DASHSCOPE_ENVIRONMENT_KEYS)
     catalog = MetadataCatalog()
     embedding_provider = DashScopeEmbeddingProvider.from_environment()
     documents = build_metadata_documents(catalog)

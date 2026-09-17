@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from shopkeeper_agent.database import create_demo_database
+from shopkeeper_agent.embeddings import DASHSCOPE_ENVIRONMENT_KEYS
 from shopkeeper_agent.generators import DeepSeekSQLGenerator, RuleBasedSQLGenerator, load_dotenv_file
 from shopkeeper_agent.service import ShopkeeperService
 from shopkeeper_agent.vector_retrieval import create_vector_retriever
@@ -31,8 +32,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # .env 只保存在本机，且已被 .gitignore 排除；环境变量优先级更高。
-    load_dotenv_file(Path(__file__).parent / ".env")
+    # 仅当使用向量检索时，让当前项目 .env 的 DashScope 配置覆盖遗留系统变量。
+    override_keys = DASHSCOPE_ENVIRONMENT_KEYS if args.retrieval == "vector" else ()
+    load_dotenv_file(Path(__file__).parent / ".env", override_keys=override_keys)
     database_path = Path(__file__).parent / "data" / "shopkeeper.db"
     create_demo_database(database_path)
     vector_retriever = None

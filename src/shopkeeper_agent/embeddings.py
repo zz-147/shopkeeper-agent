@@ -7,6 +7,18 @@ from typing import Protocol, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
 import dashscope
+from requests import RequestException
+
+
+DASHSCOPE_ENVIRONMENT_KEYS = frozenset(
+    {
+        "DASHSCOPE_API_KEY",
+        "DASHSCOPE_BASE_URL",
+        "DASHSCOPE_EMBEDDING_BASE_URL",
+        "DASHSCOPE_EMBEDDING_MODEL",
+        "DASHSCOPE_EMBEDDING_DIMENSIONS",
+    }
+)
 
 
 class EmbeddingProvider(Protocol):
@@ -65,14 +77,17 @@ class DashScopeEmbeddingProvider:
         return self._embed([text], text_type="query")[0]
 
     def _embed(self, texts: list[str], text_type: str) -> list[list[float]]:
-        response = dashscope.TextEmbedding.call(
-            model=self.model,
-            input=texts,
-            api_key=self.api_key,
-            text_type=text_type,
-            dimension=self.dimensions,
-            base_address=self.base_address,
-        )
+        try:
+            response = dashscope.TextEmbedding.call(
+                model=self.model,
+                input=texts,
+                api_key=self.api_key,
+                text_type=text_type,
+                dimension=self.dimensions,
+                base_address=self.base_address,
+            )
+        except RequestException as error:
+            raise RuntimeError("无法连接 Embedding 服务。请检查网络、代理和 Base URL 配置。") from error
         if response.status_code != 200:
             error_code = response.code or "unknown"
             raise RuntimeError(
