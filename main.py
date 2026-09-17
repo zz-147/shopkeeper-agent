@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from shopkeeper_agent.database import create_demo_database
 from shopkeeper_agent.generators import DeepSeekSQLGenerator, RuleBasedSQLGenerator, load_dotenv_file
 from shopkeeper_agent.service import ShopkeeperService
+from shopkeeper_agent.vector_retrieval import create_vector_retriever
 
 
 def main() -> int:
@@ -22,20 +23,32 @@ def main() -> int:
         default="rule",
         help="rule 为离线教学模式；deepseek 需要本机环境变量中的 API Key",
     )
+    parser.add_argument(
+        "--retrieval",
+        choices=("lexical", "vector"),
+        default="lexical",
+        help="lexical 为本地别名匹配；vector 使用 DashScope Embedding 与本地 Qdrant 索引",
+    )
     args = parser.parse_args()
 
     # .env 只保存在本机，且已被 .gitignore 排除；环境变量优先级更高。
     load_dotenv_file(Path(__file__).parent / ".env")
     database_path = Path(__file__).parent / "data" / "shopkeeper.db"
     create_demo_database(database_path)
-    generator = RuleBasedSQLGenerator() if args.model == "rule" else DeepSeekSQLGenerator.from_environment()
-    service = ShopkeeperService(database_path=database_path, generator=generator)
-
+    vector_retriever = None
     try:
+        generator = RuleBasedSQLGenerator() if args.model == "rule" else DeepSeekSQLGenerator.from_environment()
+        service = ShopkeeperService(database_path=database_path, generator=generator)
+        if args.retrieval == "vector":
+            vector_retriever = create_vector_retriever(service.catalog, Path(__file__).parent / "data" / "qdrant")
+            service.retriever = vector_retriever
         result = service.ask(args.question)
     except (ValueError, RuntimeError) as error:
         print(f"无法安全回答：{error}")
         return 1
+    finally:
+        if vector_retriever:
+            vector_retriever.close()
 
     print(f"问题：{result.question}")
     print(f"元数据来源：{', '.join(result.sources)}")

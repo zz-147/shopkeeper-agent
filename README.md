@@ -45,6 +45,25 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/query" -ContentType "
 
 `POST /query` 请求体支持两个字段：`question`（必填）和 `model`（可选，默认 `rule`；使用 DeepSeek 时填 `deepseek`）。无匹配指标、未配置密钥或未通过 SQL 安全校验时，接口返回 HTTP 400，不会执行查询。
 
+## 构建本地 Qdrant 向量索引
+
+向量检索用于处理未写入别名的相近表达。它使用 DashScope 的 `text-embedding-v4` 和项目本地的 Qdrant 存储，无需 Docker。
+
+1. 在本机 `.env` 填写 `DASHSCOPE_API_KEY`（不要提交或发送该 Key）。
+2. 构建索引：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\build_vector_index.py
+```
+
+3. 使用语义检索提问。`--retrieval vector` 不会在索引缺失时悄悄退回词法模式。
+
+```powershell
+.\.venv\Scripts\python.exe main.py "华北销售额" --model deepseek --retrieval vector
+```
+
+API 请求增加可选字段 `retrieval`；例如：`{"question":"华北销售额","model":"deepseek","retrieval":"vector"}`。
+
 ## 目录说明
 
 ```text
@@ -55,6 +74,10 @@ src/shopkeeper_agent/
   database.py      # SQLite 样例数仓与执行器
   service.py       # 把整条工作流串起来
   api.py           # FastAPI：健康检查与查询接口
+  embeddings.py    # DashScope Embedding 客户端
+  vector_store.py  # Qdrant 本地索引封装
+  vector_retrieval.py # 语义元数据召回
+scripts/build_vector_index.py # 构建元数据向量索引
 tests/             # 可离线运行的单元测试
 main.py            # 命令行入口
 ```

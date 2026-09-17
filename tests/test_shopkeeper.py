@@ -15,6 +15,8 @@ from shopkeeper_agent.retrieval import MetadataRetriever
 from shopkeeper_agent.safety import SQLSafetyValidator
 from shopkeeper_agent.service import ShopkeeperService
 from shopkeeper_agent.api import create_app
+from shopkeeper_agent.vector_retrieval import VectorMetadataRetriever, build_metadata_documents
+from shopkeeper_agent.vector_store import QdrantMetadataIndex
 from fastapi.testclient import TestClient
 
 
@@ -89,6 +91,36 @@ class MetadataRetrievalTests(unittest.TestCase):
         self.assertIn("已召回字段：order_id, category", retrieved.context)
         self.assertIn("分组字段：category", retrieved.context)
         self.assertNotIn("字段取值检索", " ".join(retrieved.sources))
+
+
+class StaticEmbeddingProvider:
+    dimensions = 2
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [[1.0, 0.0] if "指标：销售额" in text else [0.0, 1.0] for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        self.last_query = text
+        return [1.0, 0.0]
+
+
+class VectorMetadataRetrievalTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.index = QdrantMetadataIndex(":memory:", vector_size=2)
+        self.embeddings = StaticEmbeddingProvider()
+        documents = build_metadata_documents(MetadataRetriever().catalog)
+        self.index.rebuild(documents, self.embeddings.embed_documents([document.text for document in documents]))
+        self.retriever = VectorMetadataRetriever(MetadataRetriever().catalog, self.embeddings, self.index, min_score=0.9)
+
+    def tearDown(self) -> None:
+        self.retriever.close()
+
+    def test_semantic_retriever_uses_qdrant_result_for_unlisted_expression(self) -> None:
+        retrieved = self.retriever.retrieve("北方营收表现")
+
+        self.assertEqual(self.embeddings.last_query, "北方营收表现")
+        self.assertEqual(retrieved.metric.name, "销售额")
+        self.assertIn("SUM(payment_amount)", retrieved.context)
 
 
 class EnvironmentTests(unittest.TestCase):
