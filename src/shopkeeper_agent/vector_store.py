@@ -52,7 +52,7 @@ class QdrantMetadataIndex:
             ],
         )
 
-    def search(self, query_vector: Sequence[float], limit: int) -> tuple[VectorMatch, ...]:
+    def search(self, query_vector: Sequence[float], limit: int, kind: str | None = None) -> tuple[VectorMatch, ...]:
         if not self.exists():
             raise RuntimeError("未找到本地向量索引。请先运行 scripts/build_vector_index.py。")
         if len(query_vector) != self.vector_size:
@@ -61,6 +61,13 @@ class QdrantMetadataIndex:
             collection_name=self.collection_name,
             query=list(query_vector),
             limit=limit,
+            query_filter=(
+                models.Filter(
+                    must=[models.FieldCondition(key="kind", match=models.MatchValue(value=kind))]
+                )
+                if kind
+                else None
+            ),
         ).points
         return tuple(VectorMatch(score=float(point.score), payload=dict(point.payload or {})) for point in points)
 

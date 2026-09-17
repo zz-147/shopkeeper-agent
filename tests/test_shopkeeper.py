@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from shopkeeper_agent.database import create_demo_database
 from shopkeeper_agent.embeddings import DashScopeEmbeddingProvider
-from shopkeeper_agent.generators import RuleBasedSQLGenerator, load_dotenv_file
+from shopkeeper_agent.generators import RuleBasedSQLGenerator, build_sql_prompt, load_dotenv_file
 from shopkeeper_agent.retrieval import MetadataRetriever
 from shopkeeper_agent.safety import SQLSafetyValidator
 from shopkeeper_agent.service import ShopkeeperService
@@ -112,7 +112,12 @@ class VectorMetadataRetrievalTests(unittest.TestCase):
         self.embeddings = StaticEmbeddingProvider()
         documents = build_metadata_documents(MetadataRetriever().catalog)
         self.index.rebuild(documents, self.embeddings.embed_documents([document.text for document in documents]))
-        self.retriever = VectorMetadataRetriever(MetadataRetriever().catalog, self.embeddings, self.index, min_score=0.9)
+        self.retriever = VectorMetadataRetriever(
+            MetadataRetriever().catalog,
+            self.embeddings,
+            self.index,
+            min_metric_score=0.9,
+        )
 
     def tearDown(self) -> None:
         self.retriever.close()
@@ -123,6 +128,26 @@ class VectorMetadataRetrievalTests(unittest.TestCase):
         self.assertEqual(self.embeddings.last_query, "北方营收表现")
         self.assertEqual(retrieved.metric.name, "销售额")
         self.assertIn("SUM(payment_amount)", retrieved.context)
+
+    def test_vector_retrieval_does_not_create_filter_from_semantically_similar_value(self) -> None:
+        retrieved = self.retriever.retrieve("北方营收表现")
+
+        self.assertEqual(retrieved.filters, ())
+
+
+class SQLPromptTests(unittest.TestCase):
+    def test_prompt_requires_exact_metric_expression_and_forbids_unlisted_filter(self) -> None:
+        prompt = build_sql_prompt(
+            "北方营收",
+            "表：orders\n已召回字段：payment_amount\n"
+            "已召回指标：销售额 = SUM(payment_amount)，含义：订单实付金额之和\n"
+            "已召回字段取值：无\n分组字段：无",
+        )
+
+        self.assertIn("SUM(payment_amount)", prompt)
+        self.assertIn("不得改成 SUM(revenue)", prompt)
+        self.assertIn("该行是‘无’时绝不能添加 WHERE", prompt)
+        self.assertIn("<question>\n北方营收\n</question>", prompt)
 
 
 class _FakeHTTPResponse:
@@ -138,10 +163,9 @@ class DashScopeEmbeddingTests(unittest.TestCase):
             api_key="test-key",
             model="text-embedding-v4",
             dimensions=2,
-            base_address="https://example.test/api/v1",
         )
 
-    def test_document_request_uses_native_dashscope_shape_and_orders_response(self) -> None:
+    def test_document_request_uses_sdk_document_type_and_orders_response(self) -> None:
         response = _FakeHTTPResponse(
             200,
             output={
@@ -162,18 +186,36 @@ class DashScopeEmbeddingTests(unittest.TestCase):
                 "api_key": "test-key",
                 "text_type": "document",
                 "dimension": 2,
-                "base_address": "https://example.test/api/v1",
             },
         )
         self.assertEqual(vectors, [[1.0, 0.0], [0.0, 1.0]])
 
-    def test_query_request_uses_query_text_type(self) -> None:
+    def test_query_request_uses_sdk_query_type(self) -> None:
         response = _FakeHTTPResponse(200, output={"embeddings": [{"text_index": 0, "embedding": [0.2, 0.8]}]})
         with patch("shopkeeper_agent.embeddings.dashscope.TextEmbedding.call", return_value=response) as call:
             vector = self.provider.embed_query("北方营收")
 
         self.assertEqual(call.call_args.kwargs["text_type"], "query")
         self.assertEqual(vector, [0.2, 0.8])
+
+    def test_document_requests_are_split_into_batches_of_ten(self) -> None:
+        def make_response(**kwargs):
+            return _FakeHTTPResponse(
+                200,
+                output={
+                    "embeddings": [
+                        {"text_index": index, "embedding": [1.0, 0.0]}
+                        for index, _ in enumerate(kwargs["input"])
+                    ]
+                },
+            )
+
+        with patch("shopkeeper_agent.embeddings.dashscope.TextEmbedding.call", side_effect=make_response) as call:
+            vectors = self.provider.embed_documents([f"文本 {index}" for index in range(11)])
+
+        self.assertEqual(call.call_count, 2)
+        self.assertEqual([len(item.kwargs["input"]) for item in call.call_args_list], [10, 1])
+        self.assertEqual(len(vectors), 11)
 
     def test_http_error_is_translated_to_safe_message(self) -> None:
         response = _FakeHTTPResponse(400, code="InvalidParameter")
@@ -183,16 +225,8 @@ class DashScopeEmbeddingTests(unittest.TestCase):
 
     def test_network_error_is_translated_to_actionable_message(self) -> None:
         with patch("shopkeeper_agent.embeddings.dashscope.TextEmbedding.call", side_effect=ConnectionError):
-            with self.assertRaisesRegex(RuntimeError, "检查网络、代理和 Base URL"):
+            with self.assertRaisesRegex(RuntimeError, "检查网络和代理"):
                 self.provider.embed_query("北方营收")
-
-    def test_compatible_base_url_is_converted_to_native_sdk_base_url(self) -> None:
-        from shopkeeper_agent.embeddings import _native_api_base_url
-
-        self.assertEqual(
-            _native_api_base_url("https://ws-example.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"),
-            "https://ws-example.cn-beijing.maas.aliyuncs.com/api/v1",
-        )
 
 
 class EnvironmentTests(unittest.TestCase):

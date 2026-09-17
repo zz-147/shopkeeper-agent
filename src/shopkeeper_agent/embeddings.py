@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from typing import Protocol, Sequence
-from urllib.parse import urlsplit, urlunsplit
 
 import dashscope
 from requests import RequestException
@@ -13,8 +12,6 @@ from requests import RequestException
 DASHSCOPE_ENVIRONMENT_KEYS = frozenset(
     {
         "DASHSCOPE_API_KEY",
-        "DASHSCOPE_BASE_URL",
-        "DASHSCOPE_EMBEDDING_BASE_URL",
         "DASHSCOPE_EMBEDDING_MODEL",
         "DASHSCOPE_EMBEDDING_DIMENSIONS",
     }
@@ -32,19 +29,14 @@ class EmbeddingProvider(Protocol):
 
 
 class DashScopeEmbeddingProvider:
-    """基于 DashScope 官方 SDK 的 text-embedding-v4 客户端。"""
+    """使用 DashScope 官方 SDK 调用 text-embedding-v4。"""
 
-    def __init__(
-        self,
-        api_key: str,
-        model: str,
-        dimensions: int,
-        base_address: str | None = None,
-    ) -> None:
+    max_batch_size = 10
+
+    def __init__(self, api_key: str, model: str, dimensions: int) -> None:
         self.api_key = api_key
         self.model = model
         self.dimensions = dimensions
-        self.base_address = base_address
 
     @classmethod
     def from_environment(cls) -> "DashScopeEmbeddingProvider":
@@ -58,18 +50,21 @@ class DashScopeEmbeddingProvider:
             raise RuntimeError("DASHSCOPE_EMBEDDING_DIMENSIONS 必须是正整数。") from error
         if dimensions <= 0:
             raise RuntimeError("DASHSCOPE_EMBEDDING_DIMENSIONS 必须是正整数。")
-        configured_base_url = os.getenv("DASHSCOPE_EMBEDDING_BASE_URL") or os.getenv("DASHSCOPE_BASE_URL")
         return cls(
             api_key=api_key,
             model=os.getenv("DASHSCOPE_EMBEDDING_MODEL", "text-embedding-v4"),
             dimensions=dimensions,
-            base_address=_native_api_base_url(configured_base_url),
         )
 
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:
             return []
-        return self._embed(list(texts), text_type="document")
+        text_list = list(texts)
+        vectors: list[list[float]] = []
+        # 当前服务端已验证单次最多接受 10 条文本；在此处分批，调用方无需关心限制。
+        for start in range(0, len(text_list), self.max_batch_size):
+            vectors.extend(self._embed(text_list[start : start + self.max_batch_size], text_type="document"))
+        return vectors
 
     def embed_query(self, text: str) -> list[float]:
         if not text.strip():
@@ -84,10 +79,9 @@ class DashScopeEmbeddingProvider:
                 api_key=self.api_key,
                 text_type=text_type,
                 dimension=self.dimensions,
-                base_address=self.base_address,
             )
         except RequestException as error:
-            raise RuntimeError("无法连接 Embedding 服务。请检查网络、代理和 Base URL 配置。") from error
+            raise RuntimeError("无法连接 Embedding 服务。请检查网络和代理配置。") from error
         if response.status_code != 200:
             error_code = response.code or "unknown"
             raise RuntimeError(
@@ -101,15 +95,3 @@ class DashScopeEmbeddingProvider:
         if len(vectors) != len(texts) or any(len(vector) != self.dimensions for vector in vectors):
             raise RuntimeError("Embedding 返回数量或向量维度与配置不一致。")
         return vectors
-
-
-def _native_api_base_url(base_url: str | None) -> str | None:
-    """将兼容模式地址转换成供 DashScope SDK 使用的原生 API 地址。"""
-
-    if not base_url:
-        return None
-    parsed = urlsplit(base_url)
-    normalized_path = parsed.path.rstrip("/")
-    if normalized_path == "/compatible-mode/v1":
-        normalized_path = "/api/v1"
-    return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, "", ""))

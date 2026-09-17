@@ -59,33 +59,28 @@ class VectorMetadataRetriever:
         catalog: MetadataCatalog,
         embeddings: EmbeddingProvider,
         index: QdrantMetadataIndex,
-        min_score: float = 0.45,
+        min_metric_score: float = 0.25,
+        min_metric_margin: float = 0.05,
     ) -> None:
         self.catalog = catalog
         self.embeddings = embeddings
         self.index = index
-        self.min_score = min_score
+        self.min_metric_score = min_metric_score
+        self.min_metric_margin = min_metric_margin
 
     def retrieve(self, question: str) -> RetrievedMetadata:
-        matches = self.index.search(self.embeddings.embed_query(question), limit=12)
-        relevant_matches = [match for match in matches if match.score >= self.min_score]
-        metric = self._first_metric(relevant_matches)
-        if not metric:
-            raise ValueError("向量检索未找到可信的业务指标，请换一种表达或补充指标元数据。")
+        query_vector = self.embeddings.embed_query(question)
+        metric_matches = self.index.search(query_vector, limit=2, kind="metric")
+        metric = self._trusted_metric(metric_matches)
 
-        filters: list[tuple[Dimension, str]] = []
+        # SQL 的筛选值必须精确命中白名单，不能仅因语义接近就生成 WHERE 条件。
+        filters = list(self.catalog.find_filters(question))
         dimensions: list[Dimension] = []
-        for match in relevant_matches:
-            if match.payload.get("kind") != "value":
-                continue
-            dimension = self._dimension_by_column(match.payload["column"])
-            value = match.payload["value"]
-            if (dimension, value) not in filters:
-                filters.append((dimension, value))
+        for dimension, _ in filters:
             if dimension not in dimensions:
                 dimensions.append(dimension)
 
-        group_dimension = self._group_dimension(question, relevant_matches)
+        group_dimension = self.catalog.find_group_dimension(question)
         if group_dimension and group_dimension not in dimensions:
             dimensions.append(group_dimension)
         return RetrievedMetadata(
@@ -98,27 +93,15 @@ class VectorMetadataRetriever:
     def close(self) -> None:
         self.index.close()
 
-    def _first_metric(self, matches: list) -> Metric | None:
-        for match in matches:
-            if match.payload.get("kind") == "metric":
-                return self._metric_by_name(match.payload["metric_name"])
-        return None
-
-    def _group_dimension(self, question: str, matches: list) -> Dimension | None:
-        if not any(marker in question for marker in ("各", "按", "分别", "每个")):
-            return None
-        for match in matches:
-            if match.payload.get("kind") == "dimension":
-                return self._dimension_by_column(match.payload["column"])
-        # 对“各地区”等明确表达保留词法兜底，避免向量召回遗漏字段时丢失分组语义。
-        return self.catalog.find_group_dimension(question)
+    def _trusted_metric(self, matches: tuple) -> Metric:
+        if not matches or matches[0].score < self.min_metric_score:
+            raise ValueError("向量检索未找到可信的业务指标，请换一种表达或补充指标元数据。")
+        if len(matches) > 1 and matches[0].score - matches[1].score < self.min_metric_margin:
+            raise ValueError("向量检索到多个接近的业务指标，请补充更明确的指标描述。")
+        return self._metric_by_name(matches[0].payload["metric_name"])
 
     def _metric_by_name(self, name: str) -> Metric:
         return next(metric for metric in self.catalog.metrics if metric.name == name)
-
-    def _dimension_by_column(self, column: str) -> Dimension:
-        return next(dimension for dimension in self.catalog.dimensions if dimension.column == column)
-
 
 def create_vector_retriever(catalog: MetadataCatalog, index_path: Path) -> VectorMetadataRetriever:
     embeddings = DashScopeEmbeddingProvider.from_environment()

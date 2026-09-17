@@ -27,7 +27,13 @@ class MetadataCatalog:
 
     table_name = "orders"
     metrics = (
-        Metric("销售额", "SUM(payment_amount)", ("销售额", "成交额", "GMV"), "订单实付金额之和", ("payment_amount",)),
+        Metric(
+            "销售额",
+            "SUM(payment_amount)",
+            ("销售额", "成交额", "GMV", "营收", "收入", "营业额"),
+            "订单实付金额之和；本项目中的营收和收入均指订单实付金额总和",
+            ("payment_amount",),
+        ),
         Metric("订单量", "COUNT(*)", ("订单量", "订单数", "订单数量"), "订单记录数", ("order_id",)),
         Metric("客单价", "AVG(payment_amount)", ("客单价", "平均订单金额"), "每笔订单的平均实付金额", ("payment_amount",)),
     )
@@ -61,4 +67,3 @@ class MetadataCatalog:
             if asks_for_group and any(marker in question for marker in ("各", "按", "分别", "每个")):
                 return dimension
         return None
-
