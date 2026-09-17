@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 import os
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -12,6 +13,8 @@ from shopkeeper_agent.database import create_demo_database
 from shopkeeper_agent.generators import RuleBasedSQLGenerator, load_dotenv_file
 from shopkeeper_agent.safety import SQLSafetyValidator
 from shopkeeper_agent.service import ShopkeeperService
+from shopkeeper_agent.api import create_app
+from fastapi.testclient import TestClient
 
 
 class ShopkeeperWorkflowTests(unittest.TestCase):
@@ -80,6 +83,53 @@ class EnvironmentTests(unittest.TestCase):
                 os.environ.pop("SHOPKEEPER_TEST_KEY", None)
             else:
                 os.environ["SHOPKEEPER_TEST_KEY"] = previous
+
+
+class APITests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_directory = tempfile.TemporaryDirectory()
+        database_path = Path(self.temp_directory.name) / "api.db"
+        self.client = TestClient(create_app(database_path))
+
+    def tearDown(self) -> None:
+        self.temp_directory.cleanup()
+
+    def test_health_check_reports_ready(self) -> None:
+        response = self.client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok", "database": "api.db"})
+
+    def test_query_returns_sql_results_and_sources(self) -> None:
+        response = self.client.post("/query", json={"question": "华北地区销售额"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["columns"], ["result"])
+        self.assertEqual(payload["rows"], [[3300.0]])
+        self.assertIn("WHERE region = '华北'", payload["sql"])
+        self.assertIn("SQLite：orders", payload["sources"])
+
+    def test_unknown_metric_returns_explicit_client_error(self) -> None:
+        response = self.client.post("/query", json={"question": "退款率"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("未识别到受支持指标", response.json()["detail"])
+
+    def test_blank_question_is_rejected_by_request_schema(self) -> None:
+        response = self.client.post("/query", json={"question": ""})
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_deepseek_configuration_error_returns_client_error(self) -> None:
+        with patch(
+            "shopkeeper_agent.api.DeepSeekSQLGenerator.from_environment",
+            side_effect=RuntimeError("未检测到 DEEPSEEK_API_KEY"),
+        ):
+            response = self.client.post("/query", json={"question": "华北地区销售额", "model": "deepseek"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("未检测到 DEEPSEEK_API_KEY", response.json()["detail"])
 
 
 if __name__ == "__main__":

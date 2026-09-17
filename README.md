@@ -29,6 +29,22 @@
 .\.venv\Scripts\python.exe main.py "华北地区销售额" --model deepseek
 ```
 
+## 启动本地 API
+
+安装依赖后，在项目根目录执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn shopkeeper_agent.api:app --app-dir src --reload
+```
+
+打开 `http://127.0.0.1:8000/docs` 可以直接在 Swagger 页面测试接口。也可以在另一个 PowerShell 窗口调用：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/query" -ContentType "application/json" -Body '{"question":"华北地区销售额"}'
+```
+
+`POST /query` 请求体支持两个字段：`question`（必填）和 `model`（可选，默认 `rule`；使用 DeepSeek 时填 `deepseek`）。无匹配指标、未配置密钥或未通过 SQL 安全校验时，接口返回 HTTP 400，不会执行查询。
+
 ## 目录说明
 
 ```text
@@ -38,6 +54,7 @@ src/shopkeeper_agent/
   safety.py        # SQL 只读、单语句、表白名单校验
   database.py      # SQLite 样例数仓与执行器
   service.py       # 把整条工作流串起来
+  api.py           # FastAPI：健康检查与查询接口
 tests/             # 可离线运行的单元测试
 main.py            # 命令行入口
 ```
@@ -47,4 +64,3 @@ main.py            # 命令行入口
 - 样例元数据和订单数据是教学数据，不是生产数据。
 - 规则生成器仅覆盖已声明的指标和维度；未知问题会明确报错，而非猜测 SQL。
 - 这不是“任意 SQL 执行器”：安全层只允许访问 `orders` 表的 `SELECT` 语句。
-
