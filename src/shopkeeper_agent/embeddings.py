@@ -1,12 +1,12 @@
-"""Embedding 提供者。DashScope 使用 OpenAI 兼容的 embeddings 接口。"""
+"""DashScope text-embedding-v4 提供者。"""
 
 from __future__ import annotations
 
-import json
 import os
-import urllib.error
-import urllib.request
 from typing import Protocol, Sequence
+from urllib.parse import urlsplit, urlunsplit
+
+import dashscope
 
 
 class EmbeddingProvider(Protocol):
@@ -20,13 +20,19 @@ class EmbeddingProvider(Protocol):
 
 
 class DashScopeEmbeddingProvider:
-    """DashScope text-embedding-v4 的最小、无框架依赖客户端。"""
+    """基于 DashScope 官方 SDK 的 text-embedding-v4 客户端。"""
 
-    def __init__(self, api_key: str, base_url: str, model: str, dimensions: int) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        dimensions: int,
+        base_address: str | None = None,
+    ) -> None:
         self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
         self.model = model
         self.dimensions = dimensions
+        self.base_address = base_address
 
     @classmethod
     def from_environment(cls) -> "DashScopeEmbeddingProvider":
@@ -40,47 +46,55 @@ class DashScopeEmbeddingProvider:
             raise RuntimeError("DASHSCOPE_EMBEDDING_DIMENSIONS 必须是正整数。") from error
         if dimensions <= 0:
             raise RuntimeError("DASHSCOPE_EMBEDDING_DIMENSIONS 必须是正整数。")
+        configured_base_url = os.getenv("DASHSCOPE_EMBEDDING_BASE_URL") or os.getenv("DASHSCOPE_BASE_URL")
         return cls(
             api_key=api_key,
-            base_url=os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
             model=os.getenv("DASHSCOPE_EMBEDDING_MODEL", "text-embedding-v4"),
             dimensions=dimensions,
+            base_address=_native_api_base_url(configured_base_url),
         )
 
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:
             return []
-        return self._embed(list(texts))
+        return self._embed(list(texts), text_type="document")
 
     def embed_query(self, text: str) -> list[float]:
         if not text.strip():
             raise ValueError("Embedding 查询文本不能为空。")
-        return self._embed([text])[0]
+        return self._embed([text], text_type="query")[0]
 
-    def _embed(self, texts: list[str]) -> list[list[float]]:
-        payload = json.dumps(
-            {"model": self.model, "input": texts, "dimensions": self.dimensions, "encoding_format": "float"},
-            ensure_ascii=False,
-        ).encode("utf-8")
-        request = urllib.request.Request(
-            f"{self.base_url}/embeddings",
-            data=payload,
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-            method="POST",
+    def _embed(self, texts: list[str], text_type: str) -> list[list[float]]:
+        response = dashscope.TextEmbedding.call(
+            model=self.model,
+            input=texts,
+            api_key=self.api_key,
+            text_type=text_type,
+            dimension=self.dimensions,
+            base_address=self.base_address,
         )
+        if response.status_code != 200:
+            error_code = response.code or "unknown"
+            raise RuntimeError(
+                f"Embedding 服务请求失败（HTTP {response.status_code}，错误代码：{error_code}）。"
+            )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                body = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            raise RuntimeError(f"Embedding 服务返回 HTTP {error.code}。") from error
-        except urllib.error.URLError as error:
-            raise RuntimeError(f"Embedding 服务请求失败：{error.reason}") from error
-
-        try:
-            records = sorted(body["data"], key=lambda record: record["index"])
+            records = sorted(response.output["embeddings"], key=lambda record: record["text_index"])
             vectors = [list(record["embedding"]) for record in records]
         except (KeyError, TypeError) as error:
             raise RuntimeError("Embedding 服务返回格式异常。") from error
         if len(vectors) != len(texts) or any(len(vector) != self.dimensions for vector in vectors):
             raise RuntimeError("Embedding 返回数量或向量维度与配置不一致。")
         return vectors
+
+
+def _native_api_base_url(base_url: str | None) -> str | None:
+    """将兼容模式地址转换成供 DashScope SDK 使用的原生 API 地址。"""
+
+    if not base_url:
+        return None
+    parsed = urlsplit(base_url)
+    normalized_path = parsed.path.rstrip("/")
+    if normalized_path == "/compatible-mode/v1":
+        normalized_path = "/api/v1"
+    return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, "", ""))

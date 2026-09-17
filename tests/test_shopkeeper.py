@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from shopkeeper_agent.database import create_demo_database
+from shopkeeper_agent.embeddings import DashScopeEmbeddingProvider
 from shopkeeper_agent.generators import RuleBasedSQLGenerator, load_dotenv_file
 from shopkeeper_agent.retrieval import MetadataRetriever
 from shopkeeper_agent.safety import SQLSafetyValidator
@@ -121,6 +122,71 @@ class VectorMetadataRetrievalTests(unittest.TestCase):
         self.assertEqual(self.embeddings.last_query, "北方营收表现")
         self.assertEqual(retrieved.metric.name, "销售额")
         self.assertIn("SUM(payment_amount)", retrieved.context)
+
+
+class _FakeHTTPResponse:
+    def __init__(self, status_code: int, output: dict | None = None, code: str = "") -> None:
+        self.status_code = status_code
+        self.output = output
+        self.code = code
+
+
+class DashScopeEmbeddingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.provider = DashScopeEmbeddingProvider(
+            api_key="test-key",
+            model="text-embedding-v4",
+            dimensions=2,
+            base_address="https://example.test/api/v1",
+        )
+
+    def test_document_request_uses_native_dashscope_shape_and_orders_response(self) -> None:
+        response = _FakeHTTPResponse(
+            200,
+            output={
+                "embeddings": [
+                    {"text_index": 1, "embedding": [0.0, 1.0]},
+                    {"text_index": 0, "embedding": [1.0, 0.0]},
+                ]
+            },
+        )
+        with patch("shopkeeper_agent.embeddings.dashscope.TextEmbedding.call", return_value=response) as call:
+            vectors = self.provider.embed_documents(["第一段", "第二段"])
+
+        self.assertEqual(
+            call.call_args.kwargs,
+            {
+                "model": "text-embedding-v4",
+                "input": ["第一段", "第二段"],
+                "api_key": "test-key",
+                "text_type": "document",
+                "dimension": 2,
+                "base_address": "https://example.test/api/v1",
+            },
+        )
+        self.assertEqual(vectors, [[1.0, 0.0], [0.0, 1.0]])
+
+    def test_query_request_uses_query_text_type(self) -> None:
+        response = _FakeHTTPResponse(200, output={"embeddings": [{"text_index": 0, "embedding": [0.2, 0.8]}]})
+        with patch("shopkeeper_agent.embeddings.dashscope.TextEmbedding.call", return_value=response) as call:
+            vector = self.provider.embed_query("北方营收")
+
+        self.assertEqual(call.call_args.kwargs["text_type"], "query")
+        self.assertEqual(vector, [0.2, 0.8])
+
+    def test_http_error_is_translated_to_safe_message(self) -> None:
+        response = _FakeHTTPResponse(400, code="InvalidParameter")
+        with patch("shopkeeper_agent.embeddings.dashscope.TextEmbedding.call", return_value=response):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 400，错误代码：InvalidParameter"):
+                self.provider.embed_query("北方营收")
+
+    def test_compatible_base_url_is_converted_to_native_sdk_base_url(self) -> None:
+        from shopkeeper_agent.embeddings import _native_api_base_url
+
+        self.assertEqual(
+            _native_api_base_url("https://ws-example.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"),
+            "https://ws-example.cn-beijing.maas.aliyuncs.com/api/v1",
+        )
 
 
 class EnvironmentTests(unittest.TestCase):
