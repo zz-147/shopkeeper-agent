@@ -11,6 +11,7 @@ class Metric:
     expression: str
     aliases: tuple[str, ...]
     description: str
+    columns: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -26,9 +27,9 @@ class MetadataCatalog:
 
     table_name = "orders"
     metrics = (
-        Metric("销售额", "SUM(payment_amount)", ("销售额", "成交额", "GMV"), "订单实付金额之和"),
-        Metric("订单量", "COUNT(*)", ("订单量", "订单数", "订单数量"), "订单记录数"),
-        Metric("客单价", "AVG(payment_amount)", ("客单价", "平均订单金额"), "每笔订单的平均实付金额"),
+        Metric("销售额", "SUM(payment_amount)", ("销售额", "成交额", "GMV"), "订单实付金额之和", ("payment_amount",)),
+        Metric("订单量", "COUNT(*)", ("订单量", "订单数", "订单数量"), "订单记录数", ("order_id",)),
+        Metric("客单价", "AVG(payment_amount)", ("客单价", "平均订单金额"), "每笔订单的平均实付金额", ("payment_amount",)),
     )
     dimensions = (
         Dimension("地区", "region", ("地区", "区域"), ("华北", "华东", "华南")),
@@ -60,17 +61,4 @@ class MetadataCatalog:
             if asks_for_group and any(marker in question for marker in ("各", "按", "分别", "每个")):
                 return dimension
         return None
-
-    def build_context(self, question: str) -> str:
-        metric = self.find_metric(question)
-        filters = self.find_filters(question)
-        group_dimension = self.find_group_dimension(question)
-        filter_text = "；".join(f"{item.name}={value}" for item, value in filters) or "无"
-        group_text = group_dimension.column if group_dimension else "无"
-        return (
-            f"表：{self.table_name}(order_id, order_date, region, category, customer_level, payment_amount)\n"
-            f"指标：{metric.name} = {metric.expression}，含义：{metric.description}\n"
-            f"过滤条件：{filter_text}\n"
-            f"分组字段：{group_text}"
-        )
 

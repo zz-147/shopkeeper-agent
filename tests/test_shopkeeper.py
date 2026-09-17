@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from shopkeeper_agent.database import create_demo_database
 from shopkeeper_agent.generators import RuleBasedSQLGenerator, load_dotenv_file
+from shopkeeper_agent.retrieval import MetadataRetriever
 from shopkeeper_agent.safety import SQLSafetyValidator
 from shopkeeper_agent.service import ShopkeeperService
 from shopkeeper_agent.api import create_app
@@ -66,6 +67,30 @@ class SQLSafetyTests(unittest.TestCase):
         self.assertEqual(sql, "SELECT SUM(payment_amount) AS result FROM orders LIMIT 100")
 
 
+class MetadataRetrievalTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.retriever = MetadataRetriever()
+
+    def test_retrieves_only_metadata_needed_for_filtered_sales_question(self) -> None:
+        retrieved = self.retriever.retrieve("华北地区销售额")
+
+        self.assertEqual(retrieved.metric.name, "销售额")
+        self.assertEqual(retrieved.context.splitlines()[1], "已召回字段：payment_amount, region")
+        self.assertIn("region = '华北'", retrieved.context)
+        self.assertNotIn("客单价", retrieved.context)
+        self.assertNotIn("customer_level", retrieved.context)
+        self.assertIn("字段取值检索：地区=华北", retrieved.sources)
+
+    def test_group_question_retrieves_group_dimension_without_value_filter(self) -> None:
+        retrieved = self.retriever.retrieve("各品类订单量")
+
+        self.assertEqual(retrieved.metric.name, "订单量")
+        self.assertEqual(retrieved.group_dimension.column, "category")
+        self.assertIn("已召回字段：order_id, category", retrieved.context)
+        self.assertIn("分组字段：category", retrieved.context)
+        self.assertNotIn("字段取值检索", " ".join(retrieved.sources))
+
+
 class EnvironmentTests(unittest.TestCase):
     def test_dotenv_loader_adds_missing_value_without_overwriting_existing_one(self) -> None:
         previous = os.environ.get("SHOPKEEPER_TEST_KEY")
@@ -108,6 +133,7 @@ class APITests(unittest.TestCase):
         self.assertEqual(payload["columns"], ["result"])
         self.assertEqual(payload["rows"], [[3300.0]])
         self.assertIn("WHERE region = '华北'", payload["sql"])
+        self.assertIn("指标检索：销售额", payload["sources"])
         self.assertIn("SQLite：orders", payload["sources"])
 
     def test_unknown_metric_returns_explicit_client_error(self) -> None:

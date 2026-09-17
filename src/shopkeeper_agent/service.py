@@ -8,6 +8,7 @@ from pathlib import Path
 from .catalog import MetadataCatalog
 from .database import execute_readonly_query
 from .generators import SQLGenerator
+from .retrieval import MetadataRetriever
 from .safety import SQLSafetyValidator
 
 
@@ -21,18 +22,25 @@ class QueryResult:
 
 
 class ShopkeeperService:
-    def __init__(self, database_path: Path, generator: SQLGenerator, catalog: MetadataCatalog | None = None) -> None:
+    def __init__(
+        self,
+        database_path: Path,
+        generator: SQLGenerator,
+        catalog: MetadataCatalog | None = None,
+        retriever: MetadataRetriever | None = None,
+    ) -> None:
         self.database_path = database_path
         self.catalog = catalog or MetadataCatalog()
         self.generator = generator
+        self.retriever = retriever or MetadataRetriever(self.catalog)
         self.validator = SQLSafetyValidator(self.catalog.table_name, self.catalog.allowed_columns)
 
     def ask(self, question: str) -> QueryResult:
         question = question.strip()
         if not question:
             raise ValueError("问题不能为空。")
-        metadata_context = self.catalog.build_context(question)
-        raw_sql = self.generator.generate(question, metadata_context)
+        retrieved_metadata = self.retriever.retrieve(question)
+        raw_sql = self.generator.generate(question, retrieved_metadata.context)
         safe_sql = self.validator.validate(raw_sql)
         columns, rows = execute_readonly_query(self.database_path, safe_sql)
         return QueryResult(
@@ -40,6 +48,5 @@ class ShopkeeperService:
             sql=safe_sql,
             columns=columns,
             rows=rows,
-            sources=("内存元数据目录：指标", "内存元数据目录：维度", "SQLite：orders"),
+            sources=(*retrieved_metadata.sources, "SQLite：orders"),
         )
-
