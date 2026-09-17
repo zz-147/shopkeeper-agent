@@ -12,6 +12,22 @@ from typing import Protocol
 from .catalog import MetadataCatalog
 
 
+def load_dotenv_file(env_path: str | os.PathLike[str]) -> None:
+    """加载简单的 KEY=VALUE 配置，且不覆盖用户已经设置的系统环境变量。"""
+    path = os.fspath(env_path)
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as env_file:
+        for raw_line in env_file:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", maxsplit=1)
+            key = key.strip()
+            if key:
+                os.environ.setdefault(key, value.strip().strip("'\""))
+
+
 class SQLGenerator(Protocol):
     def generate(self, question: str, metadata_context: str) -> str:
         """只返回 SQL 文本，不执行 SQL。"""
@@ -88,4 +104,3 @@ class DeepSeekSQLGenerator:
         except (KeyError, IndexError, TypeError) as error:
             raise RuntimeError("模型返回格式异常，未取得 SQL。") from error
         return re.sub(r"^```(?:sql)?|```$", "", content.strip(), flags=re.IGNORECASE).strip()
-

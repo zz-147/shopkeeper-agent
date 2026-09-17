@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from shopkeeper_agent.database import create_demo_database
-from shopkeeper_agent.generators import DeepSeekSQLGenerator, RuleBasedSQLGenerator
+from shopkeeper_agent.generators import DeepSeekSQLGenerator, RuleBasedSQLGenerator, load_dotenv_file
 from shopkeeper_agent.service import ShopkeeperService
 
 
@@ -24,6 +24,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # .env 只保存在本机，且已被 .gitignore 排除；环境变量优先级更高。
+    load_dotenv_file(Path(__file__).parent / ".env")
     database_path = Path(__file__).parent / "data" / "shopkeeper.db"
     create_demo_database(database_path)
     generator = RuleBasedSQLGenerator() if args.model == "rule" else DeepSeekSQLGenerator.from_environment()
@@ -51,4 +53,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -3,12 +3,13 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from shopkeeper_agent.database import create_demo_database
-from shopkeeper_agent.generators import RuleBasedSQLGenerator
+from shopkeeper_agent.generators import RuleBasedSQLGenerator, load_dotenv_file
 from shopkeeper_agent.safety import SQLSafetyValidator
 from shopkeeper_agent.service import ShopkeeperService
 
@@ -60,6 +61,25 @@ class SQLSafetyTests(unittest.TestCase):
     def test_accepts_whitelisted_read_query(self) -> None:
         sql = self.validator.validate("SELECT SUM(payment_amount) AS result FROM orders LIMIT 100")
         self.assertEqual(sql, "SELECT SUM(payment_amount) AS result FROM orders LIMIT 100")
+
+
+class EnvironmentTests(unittest.TestCase):
+    def test_dotenv_loader_adds_missing_value_without_overwriting_existing_one(self) -> None:
+        previous = os.environ.get("SHOPKEEPER_TEST_KEY")
+        try:
+            os.environ["SHOPKEEPER_TEST_KEY"] = "from-system"
+            with tempfile.TemporaryDirectory() as directory:
+                env_file = Path(directory) / ".env"
+                env_file.write_text("SHOPKEEPER_TEST_KEY=from-file\nSHOPKEEPER_NEW_KEY=loaded\n", encoding="utf-8")
+                load_dotenv_file(env_file)
+            self.assertEqual(os.environ["SHOPKEEPER_TEST_KEY"], "from-system")
+            self.assertEqual(os.environ["SHOPKEEPER_NEW_KEY"], "loaded")
+        finally:
+            os.environ.pop("SHOPKEEPER_NEW_KEY", None)
+            if previous is None:
+                os.environ.pop("SHOPKEEPER_TEST_KEY", None)
+            else:
+                os.environ["SHOPKEEPER_TEST_KEY"] = previous
 
 
 if __name__ == "__main__":
